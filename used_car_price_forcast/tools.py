@@ -92,6 +92,18 @@ def precess_null(dataframe: pd.DataFrame):
     :return: pd.DataFrame,
         已经完成空值填充的数据集
     """
+    used_mouths = []
+    for regDate, creatDate in dataframe[['regDate', 'creatDate']].values:
+        regDate = str(regDate)
+        creatDate = str(creatDate)
+        regDate_Year = int(regDate[0:4])
+        regDate_Mouth = int(regDate[4:6])
+        creatDate_Year = int(creatDate[0:4])
+        creatDate_Mouth = int(creatDate[4:6])
+        mouths = (creatDate_Year - regDate_Year) * 12 + (creatDate_Mouth - regDate_Mouth)
+        used_mouths.append(mouths)
+    dataframe['used_mouths'] = used_mouths
+
     dataframe = dataframe.drop(labels='SaleID', axis=1)
     dataframe = dataframe.drop(labels='name', axis=1)
     # regDate汽车注册日期拆分为年月日三列
@@ -124,7 +136,7 @@ def precess_null(dataframe: pd.DataFrame):
     for i in power_values:
         if i < power_values_DB:
             new_i = power_values_DB
-            new_i_label = 1
+            new_i_label = -1
         elif i > power_values_UB:
             new_i = power_values_UB
             new_i_label = 1
@@ -167,7 +179,38 @@ def precess_null(dataframe: pd.DataFrame):
     return dataframe
 
 
-def eda(train_dataframe: pd.DataFrame):
+def eda(train_dataframe: pd.DataFrame) -> None:
+    """
+    对数据进行探索性数据分析，以确定特征工程如何进行
+
+    :param train_dataframe: pd.DataFrame,
+        训练数据集
+    :return: None,
+        该函数没有返回值
+    """
+    def plot_price_box(target_columns: str):
+        model_price_table = train_dataframe.groupby(target_columns)['price'].median()
+        sorted_model_index = list(model_price_table.sort_values().index)
+        for k in range(len(sorted_model_index) // 10 + 1):
+            target_model_index = sorted_model_index[10 * k: 10 * (k + 1)]
+            if len(target_model_index) == 0:
+                continue
+            index = []
+            for v in train_dataframe[target_columns].values:
+                if v in target_model_index:
+                    index.append(True)
+                else:
+                    index.append(False)
+            figure = plt.figure(figsize=(12, 8))
+            ax = figure.add_subplot(111)
+            sns.violinplot(data=train_dataframe[index], x=target_columns, y='price', split=True, inner='quart',
+                           linewidth=1)
+            sns.despine(left=True)
+            plt.ylim(-100, 35000)
+            plt.xlim(-1, 10)
+            figure.savefig('../pngs/%s_price_box_%d.png' % (target_columns, k), dpi=300)
+            plt.close(figure)
+
     # ++++++++++++++++++ model特征对价格的影响 +++++++++++++++++++++++++++++++++++++++++
     model_price_table = train_dataframe.groupby('model')['price'].mean().values
     figure = plt.figure(figsize=(12, 8))
@@ -179,34 +222,86 @@ def eda(train_dataframe: pd.DataFrame):
     ## 从散点图的分布情况来看，车型的编号大小与价格之间没有必然的联系，不过不同车型确实存在明显的平均价格上的差异。
     ## 在这种情况下，车型编号就不适于作为一个连续型特征，而是一个离散型特征，不过我们在这里看到的只是平均水平上的差异，
     ## 那么结合分布来看，是否具有明显的差异呢？我们将车型编号按照价格进行排序，然后绘制箱体图
-    model_price_table = train_dataframe.groupby('model')['price'].mean()
-    sorted_model_index = list(model_price_table.sort_values().index)
-    for k in range(24):
-        target_model_index = sorted_model_index[10*k: 10*(k+1)]
-        index = []
-        for v in train_dataframe['model'].values:
-            if v in target_model_index:
-                index.append(True)
-            else:
-                index.append(False)
-        figure = plt.figure(figsize=(12, 8))
-        ax = figure.add_subplot(111)
-        sns.violinplot(data=train_dataframe[index], x='model', y='price', split=True, inner='quart',
-                       linewidth=1)
-        sns.despine(left=True)
-        plt.ylim(-100, 35000)
-        figure.savefig('pngs/model_price_box_%d.png' % k, dpi=300)
-        plt.close(figure)
+    plot_price_box('model')
     ## 从箱体图的状态来看，不同的车型编号对于价格具有非常显著的影响，低均价的车型售价方差很小，基本都是同样的售价，而高均价的车型售价
     ## 方差就很大。这一点对于后续建模是一个很有意义的现象，这一个属性是切分数据集的候选标记之一。
     # ++++++++++++++++++ model特征对价格的影响 +++++++++++++++++++++++++++++++++++++++++
     # ++++++++++++++++++ regDate特征对价格的影响 +++++++++++++++++++++++++++++++++++++++++
-    
+    ## 绘制了年月日对于价格分布的影响，经过观察，年属性影响很大，是一个核心特征
+    ## 月份显示为异常值0的时候，对价格分布有很明显的影响，有1.1万个样本为0，所以增加这样一列标记作为模型特征之一
+    ## 月份以及日计数列没有意义，不进入特征组
+    plot_price_box('regDate_Year')
+    plot_price_box('regDate_Mouth')
+    plot_price_box('regDate_Day')
     # ++++++++++++++++++ regDate特征对价格的影响 +++++++++++++++++++++++++++++++++++++++++
 
 
 def feature_engineer(dataframe):
-    pass
+    feature_columns = ['model', 'regDate_Year', 'regDate_Mouth_Tag', 'brand', 'bodyType',
+                       'fuelType', 'gearbox', 'power_normal_label', 'kilometer', 'notRepairedDamage',
+                       'regionPriceLevel', 'regionBodyType_3', 'regionBodyType_4', 'regionBodyType_5', 'regionBodyType_6',
+                       'creatDate_Year', 'creatDate_Mouth', 'used_mouths', 'usedMouths_quar', 'kilo_quar',
+                       'power_quar', 'kilo_year_quar', 'v_0', 'v_2', 'v_3',
+                       'v_8', 'v_10', 'v_11', 'v_12']
+    feature_types = ['i', 'i', 'i', 'i', 'i',
+                     'i', 'i', 'i', 'i', 'i',
+                     'i', 'i', 'i', 'i', 'i',
+                     'i', 'i', 'f', 'f', 'f',
+                     'f', 'f', 'f', 'f', 'f',
+                     'f', 'f', 'f', 'f']
+    dataframe['regDate_Mouth_Tag'] = [1 if i == 0 else 0 for i in dataframe['regDate_Mouth'].values]
+    dataframe['kilo_per_mouth'] = dataframe['kilometer'] / dataframe['used_mouths']
+
+    brand_usedMouths_map = {}
+    for i_brand, i_used_mouths in train_dataframe[['brand', 'used_mouths']].values:
+        if i_brand not in brand_usedMouths_map:
+            brand_usedMouths_map[i_brand] = []
+        brand_usedMouths_map[i_brand].append(i_used_mouths)
+    usedMouths_quar = []
+    for i_brand, i_used_mouths in dataframe[['brand', 'used_mouths']].values:
+        i_brand_usedMouths = brand_usedMouths_map[i_brand]
+        i_usedMouths_quar = np.mean([1 if i_used_mouths > j else 0 for j in i_brand_usedMouths])
+        usedMouths_quar.append(i_usedMouths_quar)
+    dataframe['usedMouths_quar'] = usedMouths_quar
+
+    brand_kilo_map = {}
+    for i_brand, i_kilometer in train_dataframe[['brand', 'kilometer']].values:
+        if i_brand not in brand_kilo_map:
+            brand_kilo_map[i_brand] = []
+        brand_kilo_map[i_brand].append(i_kilometer)
+    kilo_quar = []
+    for i_brand, i_kilometer in dataframe[['brand', 'kilometer']].values:
+        i_brand_kilos = brand_kilo_map[i_brand]
+        i_kilo_quar = np.mean([1 if i_kilometer > j else 0 for j in i_brand_kilos])
+        kilo_quar.append(i_kilo_quar)
+    dataframe['kilo_quar'] = kilo_quar
+
+    brand_power_map = {}
+    for i_brand, i_power in train_dataframe[['brand', 'power']].values:
+        if i_brand not in brand_power_map:
+            brand_power_map[i_brand] = []
+        brand_power_map[i_brand].append(i_power)
+    power_quar = []
+    for i_brand, i_power in dataframe[['brand', 'power']].values:
+        i_brand_powers = brand_power_map[i_brand]
+        i_power_quar = np.mean([1 if i_power > j else 0 for j in i_brand_powers])
+        power_quar.append(i_power_quar)
+    dataframe['power_quar'] = power_quar
+
+    regDate_kilo_map = {}
+    for i_regDate, i_kilometer in train_dataframe[['regDate', 'kilometer']].values:
+        if i_regDate not in regDate_kilo_map:
+            regDate_kilo_map[i_regDate] = []
+        regDate_kilo_map[i_regDate].append(i_kilometer)
+    year_kilo_quar = []
+    for i_regDate, i_kilometer in dataframe[['regDate', 'kilometer']].values:
+        i_regDate_kilos = regDate_kilo_map[i_regDate]
+        i_year_kilo_quar = np.mean([1 if i_kilometer > j else 0 for j in i_regDate_kilos])
+        year_kilo_quar.append(i_year_kilo_quar)
+    dataframe['kilo_year_quar'] = year_kilo_quar
+
+    return feature_columns, feature_types, dataframe
+
 
 
 if __name__ == '__main__':
@@ -220,4 +315,9 @@ if __name__ == '__main__':
     # 对数据进行空值填充和异常值处理
     train_dataframe = precess_null(train_dataframe)
     test_dataframe = precess_null(test_dataframe)
+    # 对数据进行特征工程处理
+    feature_columns, feature_types, train_dataframe = feature_engineer(train_dataframe)
+    _, _, test_dataframe = feature_engineer(test_dataframe)
+
     print('over')
+
